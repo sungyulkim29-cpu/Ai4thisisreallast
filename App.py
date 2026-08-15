@@ -1,8 +1,8 @@
 import streamlit as st
 import speech_recognition as sr
 from openai import OpenAI
-from tavily import TavilyClient
 import edge_tts
+import requests
 import io
 import base64
 import asyncio
@@ -13,13 +13,13 @@ import asyncio
 # =========================================================
 
 st.set_page_config(
-    page_title="자비스 2.0",
+    page_title="자비스",
     page_icon="🤖",
     layout="centered"
 )
 
-st.title("🤖 자비스 2.0")
-st.caption("NVIDIA AI + 웹 검색 음성 비서")
+st.title("🤖 자비스")
+st.caption("NVIDIA AI 음성 비서")
 
 
 # =========================================================
@@ -37,7 +37,7 @@ with st.sidebar:
     )
 
     tavily_api_key = st.text_input(
-        "Tavily Search API Key",
+        "Tavily API Key",
         type="password",
         placeholder="tvly-..."
     )
@@ -61,7 +61,7 @@ with st.sidebar:
 
 
 # =========================================================
-# 세션
+# 세션 상태
 # =========================================================
 
 if "messages" not in st.session_state:
@@ -73,32 +73,34 @@ if "messages" not in st.session_state:
 # =========================================================
 
 SYSTEM_PROMPT = """
-당신은 '자비스'라는 이름의 지능형 AI 비서입니다.
+당신의 이름은 자비스입니다.
 
-성격:
+당신은 사용자를 도와주는 지능형 AI 비서입니다.
+
+[성격]
 - 친절하고 똑똑합니다.
 - 자연스럽게 대화합니다.
-- 지나치게 딱딱하지 않습니다.
-- 사용자의 질문에 직접적으로 답합니다.
+- 지나치게 딱딱하게 말하지 않습니다.
+- 사용자가 존댓말을 사용하면 존댓말로 답합니다.
+- 사용자가 편하게 말하면 자연스럽게 답합니다.
 - 모르는 것은 아는 척하지 않습니다.
-- 항상 한국어로 답변합니다.
 
-대화:
+[대화]
 - 이전 대화 내용을 참고합니다.
-- 사용자가 앞에서 말한 내용을 기억하고 대화를 이어갑니다.
+- 앞에서 나온 정보를 이용해서 대화를 자연스럽게 이어갑니다.
 - 사용자의 말을 단순히 반복하지 않습니다.
-- 실제로 도움이 되는 답변을 제공합니다.
+- 질문의 의도를 이해하고 직접 답합니다.
 
-웹 검색:
-- 검색 결과가 제공된 경우 검색 결과를 우선적으로 참고합니다.
-- 검색 결과에 없는 내용을 사실인 것처럼 만들어내지 않습니다.
-- 최신 정보가 필요한 질문에는 검색 결과의 날짜와 내용을 고려합니다.
-- 검색 결과가 여러 개라면 서로 비교하여 가장 신뢰할 수 있는 정보를 사용합니다.
-
-답변:
-- 간단한 질문은 간단하게 답합니다.
+[답변]
+- 기본적으로 한국어를 사용합니다.
+- 간단한 질문에는 짧게 답합니다.
 - 복잡한 질문은 이해하기 쉽게 설명합니다.
-- 필요한 경우 목록을 사용합니다.
+- 필요한 경우 목록이나 단계별 설명을 사용합니다.
+
+[웹 검색]
+- 검색 결과가 제공되면 검색 결과를 우선적으로 참고합니다.
+- 검색 결과에 없는 사실을 검색 결과에 있는 것처럼 말하지 않습니다.
+- 최신 정보가 필요한 경우 검색 결과의 내용을 이용합니다.
 """
 
 
@@ -109,7 +111,6 @@ SYSTEM_PROMPT = """
 def speech_to_text(audio_bytes):
 
     recognizer = sr.Recognizer()
-
     audio_file = io.BytesIO(audio_bytes)
 
     try:
@@ -144,7 +145,7 @@ def speech_to_text(audio_bytes):
 
 
 # =========================================================
-# 검색 필요 여부 판단
+# 검색이 필요한 질문인지 판단
 # =========================================================
 
 def needs_search(question):
@@ -163,12 +164,13 @@ def needs_search(question):
         "결과",
         "출시",
         "업데이트",
-        "몇 시",
-        "몇일",
         "언제",
-        "2026",
+        "몇 시",
         "검색",
-        "인터넷"
+        "인터넷",
+        "이번 주",
+        "이번달",
+        "이번 달"
     ]
 
     return any(
@@ -178,7 +180,7 @@ def needs_search(question):
 
 
 # =========================================================
-# 웹 검색
+# Tavily 검색 API
 # =========================================================
 
 def web_search(query, api_key):
@@ -188,17 +190,25 @@ def web_search(query, api_key):
 
     try:
 
-        tavily = TavilyClient(
-            api_key=api_key
+        response = requests.post(
+            "https://api.tavily.com/search",
+
+            json={
+                "api_key": api_key,
+                "query": query,
+                "search_depth": "advanced",
+                "max_results": 5,
+                "include_answer": True
+            },
+
+            timeout=30
         )
 
-        results = tavily.search(
-            query=query,
-            search_depth="advanced",
-            max_results=5
-        )
+        response.raise_for_status()
 
-        return results.get(
+        data = response.json()
+
+        return data.get(
             "results",
             []
         )
@@ -206,7 +216,7 @@ def web_search(query, api_key):
     except Exception as e:
 
         st.warning(
-            f"검색 오류: {e}"
+            f"웹 검색 오류: {e}"
         )
 
         return []
@@ -221,7 +231,7 @@ def format_search_results(results):
     if not results:
         return ""
 
-    formatted = []
+    text = ""
 
     for i, result in enumerate(results, 1):
 
@@ -240,16 +250,15 @@ def format_search_results(results):
             ""
         )
 
-        formatted.append(
-            f"""
-검색 결과 {i}
+        text += f"""
+[검색 결과 {i}]
 제목: {title}
 내용: {content}
 주소: {url}
-"""
-        )
 
-    return "\n".join(formatted)
+"""
+
+    return text
 
 
 # =========================================================
@@ -268,17 +277,14 @@ def get_ai_response(
 
         system_prompt += f"""
 
-아래는 웹 검색 결과입니다.
+[웹 검색 결과]
 
--------------------------
 {search_results}
--------------------------
 
-검색 결과를 참고하여 사용자의 질문에 답변하세요.
-
-가능하면 답변 마지막에 참고한 웹사이트의 이름이나
-주소를 간단히 표시하세요.
+위 검색 결과를 참고해서 사용자의 질문에 답변하세요.
+검색 결과에 없는 정보는 추측해서 사실처럼 말하지 마세요.
 """
+
 
     response = client.chat.completions.create(
 
@@ -293,36 +299,73 @@ def get_ai_response(
         ],
 
         temperature=0.7,
-
         top_p=0.9,
 
-        max_tokens=1024
+        # gpt-oss-20b는 추론에도 토큰을 사용할 수 있음
+        max_tokens=4096,
+
+        stream=False
     )
+
 
     if not response.choices:
 
-        return "죄송합니다. 답변을 생성하지 못했습니다."
+        return "죄송합니다. AI가 답변을 생성하지 못했습니다."
 
-    content = response.choices[0].message.content
 
-    if content is None:
+    message = response.choices[0].message
 
-        return "죄송합니다. 빈 응답이 반환되었습니다."
 
-    content = str(content).strip()
+    # =====================================================
+    # 일반 답변
+    # =====================================================
 
-    if not content:
+    content = getattr(
+        message,
+        "content",
+        None
+    )
 
-        return "죄송합니다. 답변을 생성하지 못했습니다."
 
-    return content
+    if content:
+
+        content = str(content).strip()
+
+        if content:
+
+            return content
+
+
+    # =====================================================
+    # NVIDIA reasoning_content 확인
+    # =====================================================
+
+    reasoning = getattr(
+        message,
+        "reasoning_content",
+        None
+    )
+
+
+    # reasoning만 있는 경우
+    # 사용자에게 내부 추론을 그대로 보여주지는 않고
+    # 다시 한 번 짧은 답변을 요청할 수 있도록 오류 처리
+    if reasoning:
+
+        return "답변 생성 중 문제가 발생했습니다. 다시 질문해주세요."
+
+
+    return "죄송합니다. NVIDIA AI에서 답변을 받지 못했습니다."
 
 
 # =========================================================
-# TTS
+# Edge TTS
 # =========================================================
 
-async def generate_tts(text, voice):
+async def generate_tts(
+    text,
+    voice
+):
 
     communicate = edge_tts.Communicate(
         text,
@@ -344,10 +387,17 @@ async def generate_tts(text, voice):
     return audio_fp.read()
 
 
-def text_to_speech(text, voice):
+def text_to_speech(
+    text,
+    voice
+):
 
     if not text:
+        return None
 
+    text = str(text).strip()
+
+    if not text:
         return None
 
     try:
@@ -372,7 +422,9 @@ def text_to_speech(text, voice):
 # 자동 재생
 # =========================================================
 
-def autoplay_audio(audio_bytes):
+def autoplay_audio(
+    audio_bytes
+):
 
     if not audio_bytes:
         return
@@ -382,21 +434,20 @@ def autoplay_audio(audio_bytes):
     ).decode()
 
     st.markdown(
-
         f"""
         <audio autoplay>
             <source
                 src="data:audio/mp3;base64,{b64}"
-                type="audio/mp3">
+                type="audio/mp3"
+            >
         </audio>
         """,
-
         unsafe_allow_html=True
     )
 
 
 # =========================================================
-# 기존 대화 표시
+# 기존 대화 출력
 # =========================================================
 
 for message in st.session_state.messages:
@@ -476,9 +527,9 @@ if user_input:
         st.stop()
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # 사용자 메시지 저장
-    # -----------------------------------------------------
+    # =====================================================
 
     st.session_state.messages.append(
         {
@@ -493,9 +544,9 @@ if user_input:
         st.write(user_input)
 
 
-    # -----------------------------------------------------
-    # NVIDIA 연결
-    # -----------------------------------------------------
+    # =====================================================
+    # NVIDIA 클라이언트
+    # =====================================================
 
     client = OpenAI(
 
@@ -505,9 +556,9 @@ if user_input:
     )
 
 
-    # -----------------------------------------------------
-    # 검색
-    # -----------------------------------------------------
+    # =====================================================
+    # 웹 검색
+    # =====================================================
 
     search_results = []
 
@@ -516,7 +567,7 @@ if user_input:
         if tavily_api_key:
 
             with st.spinner(
-                "🔎 최신 정보를 검색하는 중..."
+                "🔎 웹에서 최신 정보를 찾는 중..."
             ):
 
                 search_results = web_search(
@@ -527,48 +578,46 @@ if user_input:
             if search_results:
 
                 with st.expander(
-                    "🔎 검색 결과 보기"
+                    "🔎 검색한 자료 보기"
                 ):
 
                     for result in search_results:
 
+                        title = result.get(
+                            "title",
+                            "제목 없음"
+                        )
+
+                        url = result.get(
+                            "url",
+                            ""
+                        )
+
                         st.markdown(
-                            f"**{result.get('title', '제목 없음')}**"
+                            f"**{title}**"
                         )
 
-                        st.write(
-                            result.get(
-                                "content",
-                                ""
-                            )[:500]
-                        )
-
-                        st.write(
-                            result.get(
-                                "url",
-                                ""
-                            )
-                        )
+                        st.caption(url)
 
         else:
 
             st.info(
-                "검색 API 키가 없어 일반 AI 모드로 답변합니다."
+                "Tavily API Key가 없어 웹 검색 없이 답변합니다."
             )
 
 
-    # -----------------------------------------------------
-    # 검색 결과 텍스트
-    # -----------------------------------------------------
+    # =====================================================
+    # 검색 결과 변환
+    # =====================================================
 
     formatted_results = format_search_results(
         search_results
     )
 
 
-    # -----------------------------------------------------
-    # AI 메시지
-    # -----------------------------------------------------
+    # =====================================================
+    # 대화 기록
+    # =====================================================
 
     ai_messages = [
 
@@ -582,9 +631,9 @@ if user_input:
     ]
 
 
-    # -----------------------------------------------------
-    # NVIDIA AI 응답
-    # -----------------------------------------------------
+    # =====================================================
+    # AI 응답
+    # =====================================================
 
     with st.chat_message("assistant"):
 
@@ -612,18 +661,18 @@ if user_input:
                 st.stop()
 
 
-        # -------------------------------------------------
-        # AI 답변 출력
-        # -------------------------------------------------
+        # =================================================
+        # 답변 출력
+        # =================================================
 
         st.write(
             ai_response
         )
 
 
-        # -------------------------------------------------
-        # 대화 기록 저장
-        # -------------------------------------------------
+        # =================================================
+        # 대화 저장
+        # =================================================
 
         st.session_state.messages.append(
 
@@ -635,9 +684,9 @@ if user_input:
         )
 
 
-        # -------------------------------------------------
+        # =================================================
         # TTS
-        # -------------------------------------------------
+        # =================================================
 
         with st.spinner(
             "🔊 자비스가 말하는 중..."
