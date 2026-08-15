@@ -3,9 +3,11 @@ import speech_recognition as sr
 from openai import OpenAI
 import edge_tts
 import requests
+from bs4 import BeautifulSoup
 import io
 import base64
 import asyncio
+import re
 
 
 # =========================================================
@@ -19,7 +21,7 @@ st.set_page_config(
 )
 
 st.title("🤖 자비스")
-st.caption("NVIDIA AI 음성 비서")
+st.caption("NVIDIA AI + 웹 검색 + 음성 비서")
 
 
 # =========================================================
@@ -30,16 +32,10 @@ with st.sidebar:
 
     st.header("⚙️ 설정")
 
-    nvidia_api_key = st.text_input(
+    api_key = st.text_input(
         "NVIDIA API Key",
         type="password",
         placeholder="nvapi-..."
-    )
-
-    tavily_api_key = st.text_input(
-        "Tavily API Key",
-        type="password",
-        placeholder="tvly-..."
     )
 
     voice = st.selectbox(
@@ -48,6 +44,11 @@ with st.sidebar:
             "ko-KR-SunHiNeural",
             "ko-KR-InJoonNeural"
         ]
+    )
+
+    search_enabled = st.checkbox(
+        "🔎 웹 검색 사용",
+        value=True
     )
 
     st.divider()
@@ -61,7 +62,7 @@ with st.sidebar:
 
 
 # =========================================================
-# 세션 상태
+# 세션
 # =========================================================
 
 if "messages" not in st.session_state:
@@ -80,27 +81,29 @@ SYSTEM_PROMPT = """
 [성격]
 - 친절하고 똑똑합니다.
 - 자연스럽게 대화합니다.
-- 지나치게 딱딱하게 말하지 않습니다.
+- 너무 딱딱하거나 로봇처럼 말하지 않습니다.
 - 사용자가 존댓말을 사용하면 존댓말로 답합니다.
 - 사용자가 편하게 말하면 자연스럽게 답합니다.
 - 모르는 것은 아는 척하지 않습니다.
 
 [대화]
-- 이전 대화 내용을 참고합니다.
-- 앞에서 나온 정보를 이용해서 대화를 자연스럽게 이어갑니다.
+- 이전 대화의 내용을 기억하고 대화의 맥락을 유지합니다.
+- 사용자가 앞에서 말한 정보를 적절하게 활용합니다.
 - 사용자의 말을 단순히 반복하지 않습니다.
-- 질문의 의도를 이해하고 직접 답합니다.
-
-[답변]
-- 기본적으로 한국어를 사용합니다.
-- 간단한 질문에는 짧게 답합니다.
-- 복잡한 질문은 이해하기 쉽게 설명합니다.
-- 필요한 경우 목록이나 단계별 설명을 사용합니다.
+- 질문의 의도를 이해해서 실제 답변을 제공합니다.
 
 [웹 검색]
-- 검색 결과가 제공되면 검색 결과를 우선적으로 참고합니다.
-- 검색 결과에 없는 사실을 검색 결과에 있는 것처럼 말하지 않습니다.
-- 최신 정보가 필요한 경우 검색 결과의 내용을 이용합니다.
+- 검색 자료가 제공되면 그것을 적극적으로 활용합니다.
+- 검색 자료와 일반적인 지식을 구분합니다.
+- 최신 정보가 필요한 질문은 검색 자료를 우선합니다.
+- 검색 자료에 없는 내용을 검색했다고 주장하지 않습니다.
+- 검색 자료가 부족하면 솔직하게 말합니다.
+
+[답변]
+- 기본적으로 한국어로 답변합니다.
+- 간단한 질문은 짧게 답합니다.
+- 복잡한 질문은 이해하기 쉽게 설명합니다.
+- 필요하면 목록을 사용합니다.
 """
 
 
@@ -164,13 +167,16 @@ def needs_search(question):
         "결과",
         "출시",
         "업데이트",
+        "패치",
         "언제",
         "몇 시",
         "검색",
         "인터넷",
         "이번 주",
         "이번달",
-        "이번 달"
+        "이번 달",
+        "올해",
+        "2026"
     ]
 
     return any(
@@ -180,43 +186,108 @@ def needs_search(question):
 
 
 # =========================================================
-# Tavily 검색 API
+# 검색어 정리
 # =========================================================
 
-def web_search(query, api_key):
+def make_search_query(question):
 
-    if not api_key:
-        return []
+    query = question.strip()
+
+    # 너무 긴 질문은 검색어로 사용하기 좋게 정리
+    query = re.sub(
+        r"\s+",
+        " ",
+        query
+    )
+
+    return query[:300]
+
+
+# =========================================================
+# DuckDuckGo 웹 검색
+# =========================================================
+
+def web_search(query):
 
     try:
 
-        response = requests.post(
-            "https://api.tavily.com/search",
+        url = "https://html.duckduckgo.com/html/"
 
-            json={
-                "api_key": api_key,
-                "query": query,
-                "search_depth": "advanced",
-                "max_results": 5,
-                "include_answer": True
+        headers = {
+            "User-Agent":
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/120 Safari/537.36"
+        }
+
+        response = requests.get(
+            url,
+            params={
+                "q": query
             },
-
-            timeout=30
+            headers=headers,
+            timeout=15
         )
 
         response.raise_for_status()
 
-        data = response.json()
-
-        return data.get(
-            "results",
-            []
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
         )
+
+        results = []
+
+        for result in soup.select(
+            ".result"
+        )[:5]:
+
+            title_element = result.select_one(
+                ".result__a"
+            )
+
+            snippet_element = result.select_one(
+                ".result__snippet"
+            )
+
+            if not title_element:
+                continue
+
+            title = title_element.get_text(
+                " ",
+                strip=True
+            )
+
+            link = title_element.get(
+                "href",
+                ""
+            )
+
+            snippet = ""
+
+            if snippet_element:
+
+                snippet = snippet_element.get_text(
+                    " ",
+                    strip=True
+                )
+
+            results.append(
+                {
+                    "title": title,
+                    "url": link,
+                    "content": snippet
+                }
+            )
+
+        return results
 
     except Exception as e:
 
         st.warning(
-            f"웹 검색 오류: {e}"
+            f"웹 검색을 사용할 수 없습니다: {e}"
         )
 
         return []
@@ -226,36 +297,33 @@ def web_search(query, api_key):
 # 검색 결과 정리
 # =========================================================
 
-def format_search_results(results):
+def format_search_results(
+    results
+):
 
     if not results:
         return ""
 
     text = ""
 
-    for i, result in enumerate(results, 1):
-
-        title = result.get(
-            "title",
-            "제목 없음"
-        )
-
-        content = result.get(
-            "content",
-            ""
-        )
-
-        url = result.get(
-            "url",
-            ""
-        )
+    for i, result in enumerate(
+        results,
+        1
+    ):
 
         text += f"""
 [검색 결과 {i}]
-제목: {title}
-내용: {content}
-주소: {url}
 
+제목:
+{result["title"]}
+
+내용:
+{result["content"]}
+
+주소:
+{result["url"]}
+
+-------------------------
 """
 
     return text
@@ -277,18 +345,21 @@ def get_ai_response(
 
         system_prompt += f"""
 
-[웹 검색 결과]
+[웹 검색 자료]
 
 {search_results}
 
-위 검색 결과를 참고해서 사용자의 질문에 답변하세요.
-검색 결과에 없는 정보는 추측해서 사실처럼 말하지 마세요.
+위 검색 자료를 참고하여 사용자의 질문에 답변하세요.
+
+검색 자료의 내용과 일반적인 지식을 구분하세요.
+검색 자료에 없는 최신 정보를 만들어내지 마세요.
 """
 
 
     response = client.chat.completions.create(
 
-        model="openai/gpt-oss-20b",
+        # NVIDIA에서 제공하는 모델
+        model="qwen/qwen3-next-80b-a3b-instruct",
 
         messages=[
             {
@@ -298,11 +369,11 @@ def get_ai_response(
             *messages
         ],
 
-        temperature=0.7,
-        top_p=0.9,
+        temperature=0.6,
 
-        # gpt-oss-20b는 추론에도 토큰을 사용할 수 있음
-        max_tokens=4096,
+        top_p=0.8,
+
+        max_tokens=2048,
 
         stream=False
     )
@@ -310,15 +381,13 @@ def get_ai_response(
 
     if not response.choices:
 
-        return "죄송합니다. AI가 답변을 생성하지 못했습니다."
+        return (
+            "죄송합니다. "
+            "AI가 답변을 생성하지 못했습니다."
+        )
 
 
     message = response.choices[0].message
-
-
-    # =====================================================
-    # 일반 답변
-    # =====================================================
 
     content = getattr(
         message,
@@ -336,26 +405,10 @@ def get_ai_response(
             return content
 
 
-    # =====================================================
-    # NVIDIA reasoning_content 확인
-    # =====================================================
-
-    reasoning = getattr(
-        message,
-        "reasoning_content",
-        None
+    return (
+        "죄송합니다. "
+        "NVIDIA AI에서 답변을 받지 못했습니다."
     )
-
-
-    # reasoning만 있는 경우
-    # 사용자에게 내부 추론을 그대로 보여주지는 않고
-    # 다시 한 번 짧은 답변을 요청할 수 있도록 오류 처리
-    if reasoning:
-
-        return "답변 생성 중 문제가 발생했습니다. 다시 질문해주세요."
-
-
-    return "죄송합니다. NVIDIA AI에서 답변을 받지 못했습니다."
 
 
 # =========================================================
@@ -395,11 +448,6 @@ def text_to_speech(
     if not text:
         return None
 
-    text = str(text).strip()
-
-    if not text:
-        return None
-
     try:
 
         return asyncio.run(
@@ -419,7 +467,7 @@ def text_to_speech(
 
 
 # =========================================================
-# 자동 재생
+# 자동 음성 재생
 # =========================================================
 
 def autoplay_audio(
@@ -447,7 +495,7 @@ def autoplay_audio(
 
 
 # =========================================================
-# 기존 대화 출력
+# 기존 대화 표시
 # =========================================================
 
 for message in st.session_state.messages:
@@ -518,7 +566,7 @@ if text_input:
 
 if user_input:
 
-    if not nvidia_api_key:
+    if not api_key:
 
         st.error(
             "⚠️ NVIDIA API Key를 입력해주세요."
@@ -545,14 +593,16 @@ if user_input:
 
 
     # =====================================================
-    # NVIDIA 클라이언트
+    # NVIDIA 연결
     # =====================================================
 
     client = OpenAI(
 
-        base_url="https://integrate.api.nvidia.com/v1",
+        base_url=(
+            "https://integrate.api.nvidia.com/v1"
+        ),
 
-        api_key=nvidia_api_key
+        api_key=api_key
     )
 
 
@@ -562,52 +612,49 @@ if user_input:
 
     search_results = []
 
-    if needs_search(user_input):
+    if (
+        search_enabled
+        and needs_search(user_input)
+    ):
 
-        if tavily_api_key:
+        search_query = make_search_query(
+            user_input
+        )
 
-            with st.spinner(
-                "🔎 웹에서 최신 정보를 찾는 중..."
-            ):
+        with st.spinner(
+            "🔎 인터넷을 검색하는 중..."
+        ):
 
-                search_results = web_search(
-                    user_input,
-                    tavily_api_key
-                )
-
-            if search_results:
-
-                with st.expander(
-                    "🔎 검색한 자료 보기"
-                ):
-
-                    for result in search_results:
-
-                        title = result.get(
-                            "title",
-                            "제목 없음"
-                        )
-
-                        url = result.get(
-                            "url",
-                            ""
-                        )
-
-                        st.markdown(
-                            f"**{title}**"
-                        )
-
-                        st.caption(url)
-
-        else:
-
-            st.info(
-                "Tavily API Key가 없어 웹 검색 없이 답변합니다."
+            search_results = web_search(
+                search_query
             )
 
 
+        if search_results:
+
+            with st.expander(
+                "🔎 검색 결과 보기"
+            ):
+
+                for result in search_results:
+
+                    st.markdown(
+                        f"**{result['title']}**"
+                    )
+
+                    st.caption(
+                        result["url"]
+                    )
+
+                    if result["content"]:
+
+                        st.write(
+                            result["content"]
+                        )
+
+
     # =====================================================
-    # 검색 결과 변환
+    # 검색 결과 정리
     # =====================================================
 
     formatted_results = format_search_results(
@@ -661,10 +708,6 @@ if user_input:
                 st.stop()
 
 
-        # =================================================
-        # 답변 출력
-        # =================================================
-
         st.write(
             ai_response
         )
@@ -675,12 +718,10 @@ if user_input:
         # =================================================
 
         st.session_state.messages.append(
-
             {
                 "role": "assistant",
                 "content": ai_response
             }
-
         )
 
 
@@ -707,4 +748,4 @@ if user_input:
             st.audio(
                 speech_bytes,
                 format="audio/mp3"
-            )
+    )
