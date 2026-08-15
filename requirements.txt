@@ -2,4 +2,5 @@ streamlit
 SpeechRecognition
 openai
 edge-tts
-tavily-python
+requests
+beautifulsoup4
