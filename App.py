@@ -11,7 +11,7 @@ import re
 
 
 # =========================================================
-# 기본 설정
+# 설정
 # =========================================================
 
 st.set_page_config(
@@ -21,7 +21,7 @@ st.set_page_config(
 )
 
 st.title("🤖 자비스")
-st.caption("NVIDIA AI · 웹 검색 · 음성 비서")
+st.caption("NVIDIA AI · 실시간 웹 검색 · 음성 비서")
 
 
 # =========================================================
@@ -39,7 +39,7 @@ with st.sidebar:
     )
 
     voice = st.selectbox(
-        "🔊 자비스 음성",
+        "🔊 음성",
         [
             "ko-KR-SunHiNeural",
             "ko-KR-InJoonNeural"
@@ -62,7 +62,7 @@ with st.sidebar:
 
 
 # =========================================================
-# 대화 기록
+# 세션
 # =========================================================
 
 if "messages" not in st.session_state:
@@ -74,41 +74,40 @@ if "messages" not in st.session_state:
 # =========================================================
 
 SYSTEM_PROMPT = """
-당신은 '자비스'라는 이름의 AI 비서입니다.
+당신의 이름은 자비스입니다.
 
-당신의 역할은 사용자의 질문을 이해하고
-정확하고 자연스럽게 도움을 주는 것입니다.
+당신은 사용자를 도와주는 AI 비서입니다.
 
-규칙:
+중요한 규칙:
 
 1. 항상 한국어로 답변합니다.
-2. 사용자의 질문에 직접 답합니다.
-3. 이전 대화의 내용을 참고하여 자연스럽게 대화합니다.
-4. 사용자가 말한 내용을 불필요하게 반복하지 않습니다.
-5. 모르는 내용은 모른다고 말합니다.
-6. 사실을 지어내지 않습니다.
-7. 최신 정보가 필요한 경우 제공된 웹 검색 결과를 사용합니다.
-8. 웹 검색 결과가 없으면 인터넷을 검색했다고 주장하지 않습니다.
-9. 간단한 질문은 간단하게 답합니다.
-10. 복잡한 질문은 이해하기 쉽게 설명합니다.
-11. 코드 질문에는 실행 가능한 코드를 제공합니다.
+2. 사용자의 질문을 정확하게 이해합니다.
+3. 이전 대화의 맥락을 기억합니다.
+4. 모르는 정보를 추측해서 사실처럼 말하지 않습니다.
+5. 최신 정보가 필요한 질문은 반드시 제공된 웹 검색 결과를 확인합니다.
+6. 웹 검색 결과가 있으면 검색 결과를 최우선으로 참고합니다.
+7. 검색 결과와 알고 있던 정보를 구분합니다.
+8. 검색 결과가 없으면 검색했다고 거짓말하지 않습니다.
+9. 답변은 자연스럽고 이해하기 쉽게 작성합니다.
+10. 사용자가 게임에 대해 질문하면 게임의 최신 정보를 우선합니다.
 
-당신은 단순히 사용자의 문장을 반복하는 챗봇이 아닙니다.
-사용자의 의도를 이해하고 실제로 도움이 되는 답변을 해야 합니다.
+특히 게임의 '신캐', '최신 영웅', '현재 패치',
+'최근 업데이트' 같은 질문은 과거 지식만으로 답하지 마세요.
+반드시 제공된 최신 검색 결과를 확인하세요.
 """
 
 
 # =========================================================
-# 음성 → 텍스트
+# 음성 인식
 # =========================================================
 
 def speech_to_text(audio_bytes):
 
     recognizer = sr.Recognizer()
 
-    audio_file = io.BytesIO(audio_bytes)
-
     try:
+
+        audio_file = io.BytesIO(audio_bytes)
 
         with sr.AudioFile(audio_file) as source:
 
@@ -126,7 +125,7 @@ def speech_to_text(audio_bytes):
     except sr.RequestError as e:
 
         st.error(
-            f"음성 인식 서비스 오류: {e}"
+            f"음성 인식 오류: {e}"
         )
 
         return None
@@ -134,55 +133,77 @@ def speech_to_text(audio_bytes):
     except Exception as e:
 
         st.error(
-            f"오디오 처리 오류: {e}"
+            f"오디오 오류: {e}"
         )
 
         return None
 
 
 # =========================================================
-# 검색 여부 판단
+# 검색이 필요한지 판단
 # =========================================================
 
 def needs_search(question):
 
     keywords = [
-        "오늘",
-        "현재",
-        "지금",
+
+        # 최신 정보
         "최신",
         "최근",
+        "현재",
+        "지금",
+        "오늘",
+        "이번",
+
+        # 뉴스
         "뉴스",
-        "날씨",
-        "가격",
-        "주가",
-        "일정",
-        "결과",
-        "출시",
-        "업데이트",
+        "소식",
+
+        # 게임
+        "신캐",
+        "신캐릭터",
+        "새 캐릭터",
+        "새 영웅",
+        "신영웅",
+        "영웅",
         "패치",
+        "패치노트",
+        "업데이트",
+        "버프",
+        "너프",
+        "픽",
+        "메타",
+
+        # 시간
         "언제",
         "몇 시",
+        "출시",
+
+        # 검색
         "검색",
         "인터넷",
-        "이번 주",
-        "이번달",
-        "이번 달",
-        "올해",
-        "2026"
+        "찾아",
+        "찾아줘",
+
+        # 날짜
+        "2026",
+        "2025"
+
     ]
 
+    question_lower = question.lower()
+
     return any(
-        word in question
+        word in question_lower
         for word in keywords
     )
 
 
 # =========================================================
-# 검색어 정리
+# 검색어 개선
 # =========================================================
 
-def make_search_query(question):
+def create_search_query(question):
 
     query = re.sub(
         r"\s+",
@@ -190,7 +211,12 @@ def make_search_query(question):
         question.strip()
     )
 
-    return query[:300]
+    # 오버워치 관련 질문이면 공식 사이트 검색을 유도
+    if "오버워치" in query or "오버워치2" in query:
+
+        query += " Overwatch Blizzard official"
+
+    return query[:400]
 
 
 # =========================================================
@@ -201,21 +227,27 @@ def web_search(query):
 
     try:
 
+        headers = {
+
+            "User-Agent":
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/131 Safari/537.36"
+
+        }
+
         response = requests.get(
-            "https://html.duckduckgo.com/html/",
+
+            "https://www.google.com/search",
 
             params={
-                "q": query
+                "q": query,
+                "hl": "ko"
             },
 
-            headers={
-                "User-Agent":
-                "Mozilla/5.0 "
-                "(Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 "
-                "(KHTML, like Gecko) "
-                "Chrome/120 Safari/537.36"
-            },
+            headers=headers,
 
             timeout=15
         )
@@ -229,50 +261,76 @@ def web_search(query):
 
         results = []
 
-        for item in soup.select(".result")[:5]:
+        # Google 검색 결과
+        for block in soup.select(
+            "div.MjjYud"
+        ):
 
-            title_element = item.select_one(
-                ".result__a"
+            link = block.select_one(
+                "a"
             )
 
-            snippet_element = item.select_one(
-                ".result__snippet"
+            title = block.select_one(
+                "h3"
             )
 
-            if not title_element:
+            if not link or not title:
                 continue
 
-            title = title_element.get_text(
-                " ",
-                strip=True
-            )
-
-            url = title_element.get(
+            url = link.get(
                 "href",
                 ""
             )
 
-            snippet = ""
+            title_text = title.get_text(
+                " ",
+                strip=True
+            )
 
-            if snippet_element:
+            description = ""
 
-                snippet = snippet_element.get_text(
+            for element in block.select(
+                "div"
+            ):
+
+                text = element.get_text(
                     " ",
                     strip=True
                 )
 
+                if (
+                    len(text) > 50
+                    and title_text not in text
+                ):
+
+                    description = text
+                    break
+
+            if url.startswith("/url?q="):
+
+                url = url.split(
+                    "/url?q="
+                )[1].split("&")[0]
+
             results.append({
-                "title": title,
+
+                "title": title_text,
+
                 "url": url,
-                "content": snippet
+
+                "content": description
+
             })
+
+            if len(results) >= 6:
+                break
 
         return results
 
     except Exception as e:
 
         st.warning(
-            f"웹 검색을 사용할 수 없습니다: {e}"
+            f"웹 검색 오류: {e}"
         )
 
         return []
@@ -282,10 +340,11 @@ def web_search(query):
 # 검색 결과 정리
 # =========================================================
 
-def format_search_results(results):
+def format_results(results):
 
     if not results:
-        return ""
+
+        return "검색 결과가 없습니다."
 
     output = ""
 
@@ -295,6 +354,7 @@ def format_search_results(results):
     ):
 
         output += f"""
+
 [검색 결과 {i}]
 
 제목:
@@ -303,10 +363,10 @@ def format_search_results(results):
 내용:
 {result["content"]}
 
-주소:
+URL:
 {result["url"]}
 
--------------------------
+--------------------------------
 """
 
     return output
@@ -316,28 +376,47 @@ def format_search_results(results):
 # NVIDIA AI
 # =========================================================
 
-def get_ai_response(
+def ask_ai(
     client,
     messages,
-    search_results=""
+    search_data
 ):
 
-    system_prompt = SYSTEM_PROMPT
+    prompt = SYSTEM_PROMPT
 
-    if search_results:
+    if search_data:
 
-        system_prompt += f"""
+        prompt += f"""
 
-다음은 인터넷 검색 결과입니다.
+==================================================
+실시간 웹 검색 결과
+==================================================
 
-=========================
-{search_results}
-=========================
+{search_data}
 
-검색 결과를 참고하여 답변하세요.
+==================================================
 
-검색 결과에 없는 최신 사실을 만들어내지 마세요.
-검색 결과가 서로 다르면 차이가 있다는 것을 알려주세요.
+위 검색 결과는 현재 인터넷에서 가져온 정보입니다.
+
+반드시 검색 결과를 먼저 확인하고 답변하세요.
+
+특히 다음과 같은 질문이라면 검색 결과에서
+가장 최신 정보를 찾아 답하세요.
+
+- 신캐
+- 최신 영웅
+- 현재 메타
+- 최신 패치
+- 최근 업데이트
+- 출시된 캐릭터
+
+검색 결과에 여러 날짜의 정보가 있다면
+가장 최근 정보를 우선하세요.
+
+검색 결과가 서로 충돌하면
+그 사실을 사용자에게 알려주세요.
+
+==================================================
 """
 
 
@@ -346,27 +425,30 @@ def get_ai_response(
         model="nvidia/nemotron-3-super-120b-a12b",
 
         messages=[
+
             {
                 "role": "system",
-                "content": system_prompt
+                "content": prompt
             },
+
             *messages
+
         ],
 
-        temperature=1.0,
+        temperature=0.7,
 
-        top_p=0.95,
+        top_p=0.9,
 
         max_tokens=4096,
 
         stream=False
+
     )
 
 
     if not response.choices:
 
         return (
-            "죄송합니다. "
             "AI가 답변을 생성하지 못했습니다."
         )
 
@@ -382,7 +464,9 @@ def get_ai_response(
 
     if content:
 
-        content = str(content).strip()
+        content = str(
+            content
+        ).strip()
 
         if content:
 
@@ -390,16 +474,16 @@ def get_ai_response(
 
 
     return (
-        "죄송합니다. "
-        "NVIDIA AI에서 답변을 받지 못했습니다."
+        "NVIDIA AI에서 "
+        "답변을 받지 못했습니다."
     )
 
 
 # =========================================================
-# Edge TTS
+# TTS
 # =========================================================
 
-async def generate_tts(
+async def make_audio(
     text,
     voice
 ):
@@ -436,7 +520,7 @@ def text_to_speech(
     try:
 
         return asyncio.run(
-            generate_tts(
+            make_audio(
                 text,
                 voice
             )
@@ -468,6 +552,7 @@ def autoplay_audio(
     ).decode()
 
     st.markdown(
+
         f"""
         <audio autoplay>
             <source
@@ -476,12 +561,13 @@ def autoplay_audio(
             >
         </audio>
         """,
+
         unsafe_allow_html=True
     )
 
 
 # =========================================================
-# 이전 대화 표시
+# 대화 출력
 # =========================================================
 
 for message in st.session_state.messages:
@@ -508,23 +594,23 @@ audio_value = st.audio_input(
 user_input = None
 
 
-if audio_value is not None:
+if audio_value:
 
     with st.spinner(
         "🎧 음성을 인식하는 중..."
     ):
 
-        recognized_text = speech_to_text(
+        text = speech_to_text(
             audio_value.read()
         )
 
-    if recognized_text:
+    if text:
 
         st.success(
-            f"📝 인식된 내용: {recognized_text}"
+            f"📝 {text}"
         )
 
-        user_input = recognized_text
+        user_input = text
 
     else:
 
@@ -538,7 +624,7 @@ if audio_value is not None:
 # =========================================================
 
 text_input = st.chat_input(
-    "자비스에게 메시지를 입력하세요..."
+    "자비스에게 물어보세요..."
 )
 
 if text_input:
@@ -547,7 +633,7 @@ if text_input:
 
 
 # =========================================================
-# AI 처리
+# 실행
 # =========================================================
 
 if user_input:
@@ -555,111 +641,114 @@ if user_input:
     if not api_key:
 
         st.error(
-            "⚠️ NVIDIA API Key를 입력해주세요."
+            "NVIDIA API Key를 입력해주세요."
         )
 
         st.stop()
 
 
-    # -----------------------------------------------------
     # 사용자 메시지 저장
-    # -----------------------------------------------------
-
     st.session_state.messages.append({
+
         "role": "user",
+
         "content": user_input
+
     })
 
 
     with st.chat_message("user"):
 
-        st.write(user_input)
+        st.write(
+            user_input
+        )
 
 
-    # -----------------------------------------------------
     # NVIDIA 연결
-    # -----------------------------------------------------
-
     client = OpenAI(
 
-        base_url="https://integrate.api.nvidia.com/v1",
+        base_url=(
+            "https://integrate.api.nvidia.com/v1"
+        ),
 
         api_key=api_key
+
     )
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # 웹 검색
-    # -----------------------------------------------------
+    # =====================================================
 
-    search_results = []
+    results = []
 
     if (
         search_enabled
         and needs_search(user_input)
     ):
 
-        query = make_search_query(
+        search_query = create_search_query(
             user_input
         )
 
         with st.spinner(
-            "🔎 인터넷 검색 중..."
+            "🔎 최신 정보를 검색하는 중..."
         ):
 
-            search_results = web_search(
-                query
+            results = web_search(
+                search_query
             )
 
-        if search_results:
+
+        if results:
 
             with st.expander(
-                "🔎 검색 결과 보기"
+                "🔎 자비스가 검색한 정보"
             ):
 
-                for result in search_results:
+                for result in results:
 
                     st.markdown(
-                        f"**{result['title']}**"
-                    )
-
-                    st.caption(
-                        result["url"]
+                        f"### {result['title']}"
                     )
 
                     st.write(
                         result["content"]
                     )
 
+                    st.caption(
+                        result["url"]
+                    )
 
-    # -----------------------------------------------------
-    # 검색 결과
-    # -----------------------------------------------------
 
-    formatted_results = format_search_results(
-        search_results
+    search_data = format_results(
+        results
     )
 
 
-    # -----------------------------------------------------
-    # 대화 기록
-    # -----------------------------------------------------
+    # =====================================================
+    # AI에 전달할 대화
+    # =====================================================
 
     ai_messages = [
 
         {
-            "role": m["role"],
-            "content": m["content"]
+
+            "role": message["role"],
+
+            "content": message["content"]
+
         }
 
-        for m in st.session_state.messages
+        for message
+        in st.session_state.messages
 
     ]
 
 
-    # -----------------------------------------------------
+    # =====================================================
     # AI 답변
-    # -----------------------------------------------------
+    # =====================================================
 
     with st.chat_message("assistant"):
 
@@ -669,10 +758,14 @@ if user_input:
 
             try:
 
-                ai_response = get_ai_response(
+                answer = ask_ai(
+
                     client,
+
                     ai_messages,
-                    formatted_results
+
+                    search_data
+
                 )
 
             except Exception as e:
@@ -685,41 +778,44 @@ if user_input:
 
 
         st.write(
-            ai_response
+            answer
         )
 
 
-        # -------------------------------------------------
-        # 대화 저장
-        # -------------------------------------------------
-
+        # 답변 저장
         st.session_state.messages.append({
+
             "role": "assistant",
-            "content": ai_response
+
+            "content": answer
+
         })
 
 
-        # -------------------------------------------------
+        # =================================================
         # TTS
-        # -------------------------------------------------
+        # =================================================
 
         with st.spinner(
-            "🔊 자비스가 말하는 중..."
+            "🔊 음성 생성 중..."
         ):
 
-            speech_bytes = text_to_speech(
-                ai_response,
+            audio = text_to_speech(
+
+                answer,
+
                 voice
+
             )
 
 
-        if speech_bytes:
+        if audio:
 
             autoplay_audio(
-                speech_bytes
+                audio
             )
 
             st.audio(
-                speech_bytes,
+                audio,
                 format="audio/mp3"
             )
